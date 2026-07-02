@@ -789,7 +789,7 @@ function setHighlight(idx, scrollToRow){
 
 function drawEquityChart(trades){
   const W=1000,H=190;
-  const M={top:16,right:24,bottom:26,left:78};
+  const M={top:16,right:24,bottom:34,left:78};
   const cw=W-M.left-M.right, ch=H-M.top-M.bottom;
   const sorted = [...trades].sort((a,b)=>a.exitMin-b.exitMin);
   let cum=0;
@@ -797,10 +797,21 @@ function drawEquityChart(trades){
   if(pts.length===0){ document.getElementById('equityHost').innerHTML=''; return; }
   const minT = pts[0].min, maxT = pts[pts.length-1].min;
   const tPad = Math.max(6,(maxT-minT)*0.03);
+  const tMinAxis = minT - tPad, tMaxAxis = maxT + tPad;
   const vMin = Math.min(0,...pts.map(p=>p.cum)), vMax = Math.max(0,...pts.map(p=>p.cum));
   const vPad = Math.max((vMax-vMin)*0.15, 1000);
-  const x = m => M.left + (m-(minT-tPad))/((maxT+tPad)-(minT-tPad))*cw;
+  const x = m => M.left + (m-tMinAxis)/(tMaxAxis-tMinAxis)*cw;
   const y = v => M.top + ch - (v-(vMin-vPad))/((vMax+vPad)-(vMin-vPad))*ch;
+
+  const range = tMaxAxis - tMinAxis;
+  const step = range > 300 ? 60 : range > 120 ? 30 : range > 60 ? 15 : range > 20 ? 5 : 1;
+  let firstTick = Math.ceil(tMinAxis/step)*step;
+  let vLines = '', vLabels = '';
+  for(let t=firstTick; t<=tMaxAxis; t+=step){
+    const xx = x(t);
+    vLines += `<line x1="${xx}" y1="${M.top}" x2="${xx}" y2="${M.top+ch}" stroke="var(--grid)" stroke-width="1"/>`;
+    vLabels += `<text x="${xx}" y="${M.top+ch+20}" fill="var(--text-dim)" font-size="10.5" font-family="JetBrains Mono" text-anchor="middle">${fmtMin(t)}</text>`;
+  }
 
   const zeroY = y(0);
   let line = `M ${x(pts[0].min)} ${y(pts[0].cum)}`;
@@ -811,10 +822,12 @@ function drawEquityChart(trades){
   const dots = pts.map(p=>`<circle cx="${x(p.min)}" cy="${y(p.cum)}" r="3" fill="${p.cum>=0?'var(--profit)':'var(--loss)'}"/>`).join('');
 
   const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${vLines}
     <line x1="${M.left}" y1="${zeroY}" x2="${M.left+cw}" y2="${zeroY}" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,3"/>
     <path d="${areaPath}" fill="${finalColor}" opacity="0.10"/>
     <path d="${line}" fill="none" stroke="${finalColor}" stroke-width="2"/>
     ${dots}
+    ${vLabels}
     <text x="${M.left-10}" y="${zeroY+4}" fill="var(--text-dim)" font-size="10.5" font-family="JetBrains Mono" text-anchor="end">0円</text>
     <text x="${M.left+cw}" y="${y(pts[pts.length-1].cum)-10}" fill="${finalColor}" font-size="12" font-family="JetBrains Mono" font-weight="700" text-anchor="end">${yen(cum)}</text>
   </svg>`;
