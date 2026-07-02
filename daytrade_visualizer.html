@@ -86,6 +86,12 @@
   .file-btn{background:transparent;color:var(--tick);border:1px solid var(--tick);border-radius:8px;padding:9px 16px;font-family:'Inter';font-weight:700;font-size:13px;cursor:pointer;transition:filter .15s, background .15s;display:inline-block;}
   .file-btn:hover{background:rgba(55,214,196,0.1);}
   .file-btn.small{padding:6px 12px;font-size:12px;}
+  .chk-cell{width:32px;text-align:center !important;}
+  .chk-cell input{cursor:pointer;width:15px;height:15px;accent-color:var(--tick);}
+  tr[data-idx]{cursor:pointer;}
+  tr.row-hidden{opacity:0.35;}
+  tr.row-highlighted td{background:rgba(55,214,196,0.10);}
+  tr.row-highlighted{box-shadow:inset 3px 0 0 var(--tick);}
   .zoom-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
   #chartHost{cursor:grab;}
   #chartHost:active{cursor:grabbing;}
@@ -133,10 +139,15 @@
   </div>
 
   <div class="panel">
-    <div class="panel-title">トレード一覧</div>
+    <div class="panel-title">トレード一覧<span class="hint">チェックでグラフの表示/非表示、行クリックで強調表示</span></div>
+    <div class="controls" style="margin-top:0;margin-bottom:10px;">
+      <button id="clearHighlightBtn" class="file-btn small">強調表示を解除</button>
+      <span class="note">チェックを外したトレードはグラフから非表示になります。行をクリックするとそのトレードだけグラフ上で強調され、他は薄く表示されます。</span>
+    </div>
     <div style="overflow-x:auto;">
       <table>
         <thead><tr>
+          <th class="chk-cell"><input type="checkbox" id="toggleAllTrades" checked title="すべて表示/非表示"></th>
           <th>方向</th><th>エントリー時刻</th><th>イグジット時刻</th><th>保有</th>
           <th>エントリー価格</th><th>イグジット価格</th><th>数量</th><th>損益</th>
         </tr></thead>
@@ -199,8 +210,8 @@ time,open,high,low,close,Volume
 const dataInput = document.getElementById('dataInput');
 
 let lastRows = [], lastTrades = [], actualSeries = null, lastStats = null;
-let chartViewRange = null; // {min, max} in minutes; null = full auto-fit range
-let currentChartScale = null; // set on each drawMainChart call, read by zoom/pan handlers
+let chartViewRange = null, currentChartScale = null;
+let tradeVisibility = {}, highlightedTradeIdx = null;
 
 function parseData(text){
   const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
@@ -531,6 +542,10 @@ function render(){
     }
   }
 
+  trades.forEach((t,i)=>{ t._idx = i; });
+  tradeVisibility = {};
+  highlightedTradeIdx = null;
+
   // header
   const dm = (rows[0].date||'').match(/(\d+)年(\d+)月(\d+)日/);
   let titleStr = '売買履歴';
@@ -687,6 +702,11 @@ function drawMainChart(rows, trades, actualSeries, viewRange){
   // trade bridges
   let bridges = '';
   trades.forEach((t,i)=>{
+    const idx = t._idx !== undefined ? t._idx : i;
+    if(tradeVisibility[idx] === false) return; // hidden via checkbox
+    const isHighlighted = highlightedTradeIdx === idx;
+    const isDimmed = highlightedTradeIdx !== null && !isHighlighted;
+
     const x1=x(t.entryMin), y1=y(t.entryPrice), x2=x(t.exitMin), y2=y(t.exitPrice);
     const win = t.pnl>=0;
     const color = win ? 'var(--profit)' : 'var(--loss)';
@@ -695,11 +715,20 @@ function drawMainChart(rows, trades, actualSeries, viewRange){
     const mx=(x1+x2)/2, my=(y1+y2)/2 + arcH;
     const sideLabel = t.side==='long' ? 'ロング' : 'ショート';
     const title = `${sideLabel}｜${t.entryTime}→${t.exitTime}\nエントリー ${yenPlain(t.entryPrice)} → イグジット ${yenPlain(t.exitPrice)}\n数量 ${t.qty.toLocaleString('ja-JP')}株\n損益 ${yen(t.pnl)}`;
+
+    const pathOpacity = isDimmed ? 0.12 : 0.85;
+    const strokeW = isHighlighted ? 3.4 : 1.6;
+    const entryOpacity = isDimmed ? 0.2 : 1;
+    const exitOpacity = isDimmed ? 0.2 : 1;
+    const entryR = isHighlighted ? 7 : 5;
+    const exitSize = isHighlighted ? 11 : 8.4;
+    const glow = isHighlighted ? ' filter="url(#tradeGlow)"' : '';
+
     bridges += `
-      <g class="trade-g" data-i="${i}" style="cursor:pointer;">
-        <path d="M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85"/>
-        <circle cx="${x1}" cy="${y1}" r="5" fill="var(--panel)" stroke="var(--amber)" stroke-width="2"/>
-        <rect x="${x2-4.2}" y="${y2-4.2}" width="8.4" height="8.4" fill="${color}" transform="rotate(45 ${x2} ${y2})"/>
+      <g class="trade-g" data-i="${idx}" style="cursor:pointer;">
+        <path d="M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}" fill="none" stroke="${color}" stroke-width="${strokeW}" opacity="${pathOpacity}"${glow}/>
+        <circle cx="${x1}" cy="${y1}" r="${entryR}" fill="var(--panel)" stroke="var(--amber)" stroke-width="2" opacity="${entryOpacity}"${glow}/>
+        <rect x="${x2-exitSize/2}" y="${y2-exitSize/2}" width="${exitSize}" height="${exitSize}" fill="${color}" opacity="${exitOpacity}" transform="rotate(45 ${x2} ${y2})"${glow}/>
         <circle cx="${x1}" cy="${y1}" r="12" fill="transparent"/>
         <circle cx="${x2}" cy="${y2}" r="12" fill="transparent"/>
         <path d="M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}" fill="none" stroke="transparent" stroke-width="14"/>
@@ -708,7 +737,12 @@ function drawMainChart(rows, trades, actualSeries, viewRange){
   });
 
   const svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
-    ${lunch}
+    <defs>
+      <filter id="tradeGlow" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="3" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>    ${lunch}
     ${hLines}${vLines}
     <path d="${pricePath}" fill="none" stroke="var(--text-faint)" stroke-width="1.3" stroke-dasharray="3,3" opacity="0.7"/>
     ${actualLayer}
@@ -739,7 +773,18 @@ function drawMainChart(rows, trades, actualSeries, viewRange){
       tooltip.style.opacity = 1;
     });
     g.addEventListener('mouseleave', ()=>{ tooltip.style.opacity = 0; });
+    g.addEventListener('click', ()=>{ setHighlight(i, true); });
   });
+}
+
+function setHighlight(idx, scrollToRow){
+  highlightedTradeIdx = (highlightedTradeIdx === idx) ? null : idx;
+  document.querySelectorAll('#tradeTableBody tr').forEach(r=>{
+    const match = parseInt(r.getAttribute('data-idx'),10) === highlightedTradeIdx;
+    r.classList.toggle('row-highlighted', match);
+    if(match && scrollToRow) r.scrollIntoView({behavior:'smooth', block:'nearest'});
+  });
+  redrawMain();
 }
 
 function drawEquityChart(trades){
@@ -776,19 +821,26 @@ function drawEquityChart(trades){
   document.getElementById('equityHost').innerHTML = svg;
 }
 
-function drawTable(trades){
-  const sorted = [...trades].sort((a,b)=>a.entryMin-b.entryMin);
-  const body = sorted.map(t=>{
-    const win = t.pnl>=0;
-    return `<tr>
-      <td class="${t.side==='long'?'side-long':'side-short'}">${t.side==='long'?'ロング':'ショート'}</td>
+function tradeRowCells(t){
+  const win = t.pnl>=0;
+  return `<td class="${t.side==='long'?'side-long':'side-short'}">${t.side==='long'?'ロング':'ショート'}</td>
       <td>${t.entryTime}</td>
       <td>${t.exitTime}</td>
       <td>${durationStr(t.entryMin,t.exitMin)}</td>
       <td>${yenPlain(t.entryPrice)}</td>
       <td>${yenPlain(t.exitPrice)}</td>
       <td>${t.qty.toLocaleString('ja-JP')}株</td>
-      <td class="${win?'pnl-pos':'pnl-neg'}">${yen(t.pnl)}</td>
+      <td class="${win?'pnl-pos':'pnl-neg'}">${yen(t.pnl)}</td>`;
+}
+
+function drawTable(trades){
+  const sorted = [...trades].sort((a,b)=>a.entryMin-b.entryMin);
+  const body = sorted.map(t=>{
+    const visible = tradeVisibility[t._idx] !== false;
+    const highlighted = highlightedTradeIdx === t._idx;
+    return `<tr data-idx="${t._idx}" class="${highlighted?'row-highlighted':''} ${visible?'':'row-hidden'}">
+      <td class="chk-cell"><input type="checkbox" class="trade-toggle" data-idx="${t._idx}" ${visible?'checked':''}></td>
+      ${tradeRowCells(t)}
     </tr>`;
   }).join('');
   document.getElementById('tradeTableBody').innerHTML = body;
@@ -996,24 +1048,36 @@ function buildSnapshotHtml(){
   const title = document.getElementById('titleDate').textContent;
   const rangeText = document.getElementById('rangeText').textContent;
   const cardsHtml = document.getElementById('summaryCards').innerHTML;
-  const chartSvg = document.getElementById('chartHost').innerHTML;
   const equitySvg = document.getElementById('equityHost').innerHTML;
-  const tableBodyHtml = document.getElementById('tradeTableBody').innerHTML;
   const symbolName = document.getElementById('symbolInput').value.trim();
+
+  const visibleTrades = lastTrades.filter(t => tradeVisibility[t._idx] !== false);
+  const hiddenCount = lastTrades.length - visibleTrades.length;
+  const sortedForExport = [...visibleTrades].sort((a,b)=>a.entryMin-b.entryMin);
+  const tableBodyHtml = sortedForExport.map(t=>`<tr>${tradeRowCells(t)}</tr>`).join('');
+
+  const exportTrades = sortedForExport.map(t => ({
+    side: t.side, entryTime: t.entryTime, exitTime: t.exitTime,
+    entryMin: t.entryMin, exitMin: t.exitMin,
+    entryPrice: t.entryPrice, exitPrice: t.exitPrice, qty: t.qty, pnl: t.pnl,
+    highlighted: highlightedTradeIdx !== null && t._idx === highlightedTradeIdx
+  }));
 
   const rawData = {
     generated_at: new Date().toISOString(),
     symbol: symbolName || null,
     title, range: rangeText,
     summary: lastStats,
+    note: hiddenCount > 0 ? `${hiddenCount}件のトレードはチェックを外して非表示にされており、このスナップショットには含まれていません。` : null,
+    highlighted_trade: exportTrades.find(t => t.highlighted) || null,
     executions: lastRows,
-    trades: lastTrades.map(t => ({
-      side: t.side, entryTime: t.entryTime, exitTime: t.exitTime,
-      entryPrice: t.entryPrice, exitPrice: t.exitPrice, qty: t.qty, pnl: t.pnl
-    })),
+    trades: exportTrades,
     actual_price_data: actualSeries || null
   };
   const rawJson = JSON.stringify(rawData, null, 2).replace(/</g, '&lt;');
+  const chartDataJson = JSON.stringify({
+    executions: lastRows, trades: exportTrades, actual_price_data: actualSeries || null
+  }).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html>
 <html lang="ja">
@@ -1045,6 +1109,17 @@ h2{font-size:15px;margin:30px 0 12px;border-bottom:1px solid var(--border);paddi
 .up{color:var(--profit);}
 .down{color:var(--loss);}
 svg{width:100%;height:auto;display:block;background:var(--panel);border-radius:10px;padding:10px;box-sizing:border-box;border:1px solid var(--border);}
+.chart-wrap{position:relative;}
+#chartHost{cursor:grab;}
+#chartHost:active{cursor:grabbing;}
+.zoom-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:10px;}
+.zoom-btn{background:transparent;color:var(--tick);border:1px solid var(--tick);border-radius:8px;padding:6px 12px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer;}
+.zoom-btn:hover{background:rgba(55,214,196,0.1);}
+.hint{font-size:11.5px;color:var(--text-faint);}
+.tooltip{position:absolute;pointer-events:none;background:#1A2330;border:1px solid var(--border);border-radius:9px;padding:10px 13px;font-size:12px;line-height:1.6;opacity:0;transition:opacity .12s ease;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.4);white-space:nowrap;}
+.tooltip .t-title{font-weight:700;font-family:'Courier New',monospace;font-size:12.5px;margin-bottom:3px;}
+.tooltip .t-row{color:var(--text-dim);}
+.tooltip .t-row b{color:var(--text);font-family:'Courier New',monospace;}
 table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px;}
 th{font-size:10.5px;text-transform:uppercase;color:var(--text-dim);padding:8px;border-bottom:1px solid var(--border);text-align:right;}
 td{padding:7px 8px;border-bottom:1px solid var(--grid);text-align:right;font-family:'Courier New',monospace;}
@@ -1061,13 +1136,20 @@ pre{background:#0D131C;border:1px solid var(--border);border-radius:8px;padding:
   <div class="meta">DAY TRADE SNAPSHOT${symbolName ? '　銘柄：'+symbolName : ''}</div>
   <h1>${title}</h1>
   <div class="meta">${rangeText}</div>
-  <div class="ai-note">このファイルはデイトレード分析ツールの画面スナップショットです。チャート（SVG）とトレード一覧に加え、末尾に構造化データ（JSON）を含みます。生成AIで分析する場合は、まず末尾のJSONを参照してください。</div>
+  <div class="ai-note">このファイルはデイトレード分析ツールの画面スナップショットです。チャートはズーム・パン・ホバーで操作でき、末尾に構造化データ（JSON）を含みます。生成AIで分析する場合は、まず末尾のJSONを参照してください。${hiddenCount > 0 ? `<br>※ ${hiddenCount}件のトレードは表示から除外されています（チェックを外したもの）。` : ''}${highlightedTradeIdx !== null ? '<br>※ 強調表示されていたトレードは JSON の highlighted_trade に記載しています。' : ''}</div>
 
   <h2>サマリー</h2>
   <div class="cards">${cardsHtml}</div>
 
   <h2>価格推移とトレード</h2>
-  ${chartSvg}
+  <div class="zoom-toolbar">
+    <button class="zoom-btn" id="zoomResetBtn">ズームをリセット</button>
+    <span class="hint">ホイールで拡大縮小／ドラッグで移動／ダブルクリックでリセット／トレードにカーソルを合わせると詳細表示</span>
+  </div>
+  <div class="chart-wrap">
+    <div id="chartHost"></div>
+    <div class="tooltip" id="tooltip"></div>
+  </div>
 
   <h2>累積損益カーブ</h2>
   ${equitySvg}
@@ -1084,6 +1166,199 @@ pre{background:#0D131C;border:1px solid var(--border);border-radius:8px;padding:
   <h2>生データ（AI分析用 JSON）</h2>
   <pre>${rawJson}</pre>
 </div>
+<script>
+(function(){
+  const DATA = ${chartDataJson};
+  const rows = DATA.executions, trades = DATA.trades, actualSeries = DATA.actual_price_data;
+  if(!rows || !rows.length) return;
+  let viewRange = null, currentScale = null;
+
+  function fmtMin(total){ const h=Math.floor(total/60), m=total%60; return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
+  function yenPlain(n){ return Math.round(n).toLocaleString('ja-JP')+'円'; }
+  function yen(n){ return (n>0?'+':'')+Math.round(n).toLocaleString('ja-JP')+'円'; }
+  function clampRange(min,max,dataMin,dataMax){
+    let w = max-min;
+    if(w > dataMax-dataMin) w = dataMax-dataMin;
+    if(min < dataMin){ min = dataMin; max = min+w; }
+    if(max > dataMax){ max = dataMax; min = max-w; }
+    return {min,max};
+  }
+
+  function drawChart(){
+    const W=1000, H=440, M={top:16,right:24,bottom:34,left:78};
+    const cw=W-M.left-M.right, ch=H-M.top-M.bottom;
+    let minT=rows[0].minutes, maxT=rows[rows.length-1].minutes;
+    if(actualSeries){
+      const aMins = actualSeries.type==='tick' ? actualSeries.points.map(p=>p.min) : actualSeries.bars.map(b=>b.min);
+      if(aMins.length){ minT=Math.min(minT,...aMins); maxT=Math.max(maxT,...aMins); }
+    }
+    const tPad = Math.max(6,(maxT-minT)*0.03);
+    const dataMin = minT-tPad, dataMax = maxT+tPad;
+    let tMin=dataMin, tMax=dataMax;
+    if(viewRange){
+      tMin=Math.max(dataMin,viewRange.min); tMax=Math.min(dataMax,viewRange.max);
+      if(tMax-tMin<5){ const mid=(tMax+tMin)/2; tMin=mid-2.5; tMax=mid+2.5; }
+    }
+    const prices = rows.map(r=>r.price);
+    if(actualSeries){
+      if(actualSeries.type==='tick') actualSeries.points.forEach(p=>prices.push(p.price));
+      else actualSeries.bars.forEach(b=>prices.push(b.high,b.low));
+    }
+    let pMin=Math.min(...prices), pMax=Math.max(...prices);
+    const pPad=(pMax-pMin)*0.12 || pMax*0.01;
+    pMin-=pPad; pMax+=pPad;
+    const x = m => M.left + (m-tMin)/(tMax-tMin)*cw;
+    const y = p => M.top + ch - (p-pMin)/(pMax-pMin)*ch;
+
+    const range = tMax-tMin;
+    const step = range>300?60:range>120?30:range>60?15:range>20?5:1;
+    let firstTick = Math.ceil(tMin/step)*step;
+    let vLines='', vLabels='';
+    for(let t=firstTick;t<=tMax;t+=step){
+      const xx=x(t);
+      vLines += '<line x1="'+xx+'" y1="'+M.top+'" x2="'+xx+'" y2="'+(M.top+ch)+'" stroke="var(--grid)" stroke-width="1"/>';
+      vLabels += '<text x="'+xx+'" y="'+(M.top+ch+20)+'" fill="var(--text-dim)" font-size="10.5" font-family="monospace" text-anchor="middle">'+fmtMin(t)+'</text>';
+    }
+    let lunch='';
+    const lb1=11*60+30, lb2=12*60+30;
+    if(lb1<tMax && lb2>tMin){
+      const lx1=x(Math.max(lb1,tMin)), lx2=x(Math.min(lb2,tMax));
+      lunch = '<rect x="'+lx1+'" y="'+M.top+'" width="'+(lx2-lx1)+'" height="'+ch+'" fill="#ffffff" opacity="0.025"/><text x="'+((lx1+lx2)/2)+'" y="'+(M.top+16)+'" fill="var(--text-faint)" font-size="10" text-anchor="middle">昼休み</text>';
+    }
+    const yTicks=5;
+    let hLines='', hLabels='';
+    for(let i=0;i<=yTicks;i++){
+      const p = pMin+(pMax-pMin)*i/yTicks, yy=y(p);
+      hLines += '<line x1="'+M.left+'" y1="'+yy+'" x2="'+(M.left+cw)+'" y2="'+yy+'" stroke="var(--grid)" stroke-width="1"/>';
+      hLabels += '<text x="'+(M.left-10)+'" y="'+(yy+4)+'" fill="var(--text-dim)" font-size="10.5" font-family="monospace" text-anchor="end">'+Math.round(p).toLocaleString('ja-JP')+'</text>';
+    }
+    let pricePath = 'M ' + rows.map(r=>x(r.minutes).toFixed(1)+' '+y(r.price).toFixed(1)).join(' L ');
+
+    let actualLayer='';
+    if(actualSeries && actualSeries.type==='tick' && actualSeries.points.length){
+      const path = 'M ' + actualSeries.points.map(p=>x(p.min).toFixed(1)+' '+y(p.price).toFixed(1)).join(' L ');
+      actualLayer = '<path d="'+path+'" fill="none" stroke="var(--tick)" stroke-width="1.8" opacity="0.9"/>';
+    } else if(actualSeries && actualSeries.type==='ohlc' && actualSeries.bars.length){
+      const n = actualSeries.bars.length;
+      const spacing = n>1 ? (x(actualSeries.bars[1].min)-x(actualSeries.bars[0].min)) : 8;
+      const bw = Math.max(2, Math.min(10, spacing*0.55));
+      let candles = '';
+      actualSeries.bars.forEach(b=>{
+        const cx=x(b.min), up=b.close>=b.open, color = up?'var(--profit)':'var(--loss)';
+        const yO=y(b.open), yC=y(b.close), yH=y(b.high), yL=y(b.low);
+        const bodyTop=Math.min(yO,yC), bodyH=Math.max(1,Math.abs(yC-yO));
+        candles += '<line x1="'+cx+'" y1="'+yH+'" x2="'+cx+'" y2="'+yL+'" stroke="'+color+'" stroke-width="1" opacity="0.85"/><rect x="'+(cx-bw/2)+'" y="'+bodyTop+'" width="'+bw+'" height="'+bodyH+'" fill="'+color+'" opacity="0.85"/>';
+      });
+      actualLayer = candles;
+    }
+
+    let bridges='';
+    const anyHighlighted = trades.some(t=>t.highlighted);
+    trades.forEach((t,i)=>{
+      const isHighlighted = !!t.highlighted;
+      const isDimmed = anyHighlighted && !isHighlighted;
+      const x1=x(t.entryMin), y1=y(t.entryPrice), x2=x(t.exitMin), y2=y(t.exitPrice);
+      const win = t.pnl>=0, color = win?'var(--profit)':'var(--loss)';
+      const dir = t.side==='long'?-1:1;
+      const arcH = Math.min(30, Math.abs(x2-x1)*0.18+8)*dir;
+      const mx=(x1+x2)/2, my=(y1+y2)/2+arcH;
+      const pathOpacity = isDimmed?0.12:0.85;
+      const strokeW = isHighlighted?3.4:1.6;
+      const dimOpacity = isDimmed?0.2:1;
+      const entryR = isHighlighted?7:5;
+      const exitSize = isHighlighted?11:8.4;
+      const glow = isHighlighted ? ' filter="url(#tradeGlow)"' : '';
+      bridges += '<g class="trade-g" data-i="'+i+'" style="cursor:pointer;">'+
+        '<path d="M '+x1+' '+y1+' Q '+mx+' '+my+' '+x2+' '+y2+'" fill="none" stroke="'+color+'" stroke-width="'+strokeW+'" opacity="'+pathOpacity+'"'+glow+'/>'+
+        '<circle cx="'+x1+'" cy="'+y1+'" r="'+entryR+'" fill="var(--panel)" stroke="var(--amber)" stroke-width="2" opacity="'+dimOpacity+'"'+glow+'/>'+
+        '<rect x="'+(x2-exitSize/2)+'" y="'+(y2-exitSize/2)+'" width="'+exitSize+'" height="'+exitSize+'" fill="'+color+'" opacity="'+dimOpacity+'" transform="rotate(45 '+x2+' '+y2+')"'+glow+'/>'+
+        '<circle cx="'+x1+'" cy="'+y1+'" r="12" fill="transparent"/>'+
+        '<circle cx="'+x2+'" cy="'+y2+'" r="12" fill="transparent"/>'+
+        '<path d="M '+x1+' '+y1+' Q '+mx+' '+my+' '+x2+' '+y2+'" fill="none" stroke="transparent" stroke-width="14"/>'+
+        '</g>';
+    });
+
+    const svg = '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet">'+
+      '<defs><filter id="tradeGlow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'+
+      lunch + hLines + vLines +
+      '<path d="'+pricePath+'" fill="none" stroke="var(--text-faint)" stroke-width="1.3" stroke-dasharray="3,3" opacity="0.7"/>'+
+      actualLayer + bridges + hLabels + vLabels +
+      '<line x1="'+M.left+'" y1="'+(M.top+ch)+'" x2="'+(M.left+cw)+'" y2="'+(M.top+ch)+'" stroke="var(--border)" stroke-width="1"/>'+
+      '</svg>';
+    document.getElementById('chartHost').innerHTML = svg;
+    currentScale = {tMin,tMax,dataMin,dataMax,M,cw,W};
+
+    const tooltip = document.getElementById('tooltip');
+    const host = document.getElementById('chartHost');
+    host.querySelectorAll('.trade-g').forEach(g=>{
+      const i = parseInt(g.getAttribute('data-i'),10);
+      const t = trades[i];
+      g.addEventListener('mousemove', function(e){
+        const rect = host.getBoundingClientRect();
+        const win = t.pnl>=0;
+        tooltip.innerHTML = '<div class="t-title" style="color:'+(win?'var(--profit)':'var(--loss)')+'">'+(t.side==='long'?'ロング':'ショート')+'　'+(win?'利益':'損失')+'</div>'+
+          '<div class="t-row">エントリー　<b>'+t.entryTime+'　'+yenPlain(t.entryPrice)+'</b></div>'+
+          '<div class="t-row">イグジット　<b>'+t.exitTime+'　'+yenPlain(t.exitPrice)+'</b></div>'+
+          '<div class="t-row">数量　<b>'+t.qty.toLocaleString('ja-JP')+'株</b></div>'+
+          '<div class="t-row">損益　<b style="color:'+(win?'var(--profit)':'var(--loss)')+'">'+yen(t.pnl)+'</b></div>';
+        tooltip.style.left = (e.clientX-rect.left+16)+'px';
+        tooltip.style.top = (e.clientY-rect.top-10)+'px';
+        tooltip.style.opacity = 1;
+      });
+      g.addEventListener('mouseleave', function(){ tooltip.style.opacity = 0; });
+    });
+  }
+
+  function resetZoom(){ viewRange = null; drawChart(); }
+
+  const chartHostEl = document.getElementById('chartHost');
+  chartHostEl.addEventListener('wheel', function(e){
+    if(!currentScale) return;
+    e.preventDefault();
+    const s = currentScale;
+    const svgEl = chartHostEl.querySelector('svg');
+    if(!svgEl) return;
+    const rect = svgEl.getBoundingClientRect();
+    const relX = Math.min(1, Math.max(0, (e.clientX-rect.left)/rect.width));
+    const px = relX*s.W;
+    const cursorTime = s.tMin + (px-s.M.left)/s.cw*(s.tMax-s.tMin);
+    const zoomFactor = e.deltaY<0 ? 0.8 : 1.25;
+    const minWidth=5, maxWidth=s.dataMax-s.dataMin;
+    let newWidth = Math.max(minWidth, Math.min(maxWidth, (s.tMax-s.tMin)*zoomFactor));
+    let newMin = cursorTime - (cursorTime-s.tMin)/(s.tMax-s.tMin)*newWidth;
+    let newMax = newMin+newWidth;
+    viewRange = clampRange(newMin,newMax,s.dataMin,s.dataMax);
+    drawChart();
+  }, {passive:false});
+  chartHostEl.addEventListener('dblclick', resetZoom);
+
+  let isPanning=false, panStartX=0, panStartRange=null;
+  chartHostEl.addEventListener('mousedown', function(e){
+    if(!currentScale) return;
+    isPanning = true; panStartX = e.clientX;
+    panStartRange = {min: currentScale.tMin, max: currentScale.tMax};
+  });
+  window.addEventListener('mousemove', function(e){
+    if(!isPanning || !currentScale) return;
+    const svgEl = chartHostEl.querySelector('svg');
+    if(!svgEl) return;
+    const rect = svgEl.getBoundingClientRect();
+    const s = currentScale;
+    const dxPx = e.clientX - panStartX;
+    const dxViewBox = dxPx/rect.width*s.W;
+    const width = panStartRange.max - panStartRange.min;
+    const dxTime = -(dxViewBox/s.cw)*width;
+    const newMin = panStartRange.min + dxTime;
+    const newMax = newMin + width;
+    viewRange = clampRange(newMin, newMax, s.dataMin, s.dataMax);
+    drawChart();
+  });
+  window.addEventListener('mouseup', function(){ isPanning = false; });
+  document.getElementById('zoomResetBtn').addEventListener('click', resetZoom);
+
+  drawChart();
+})();
+<\/script>
 </body>
 </html>`;
 }
@@ -1122,6 +1397,40 @@ function resetZoom(){
 }
 
 document.getElementById('zoomResetBtn').addEventListener('click', resetZoom);
+
+document.getElementById('tradeTableBody').addEventListener('change', (e)=>{
+  if(!e.target.classList.contains('trade-toggle')) return;
+  const idx = parseInt(e.target.getAttribute('data-idx'),10);
+  tradeVisibility[idx] = e.target.checked;
+  const row = e.target.closest('tr');
+  if(row) row.classList.toggle('row-hidden', !e.target.checked);
+  redrawMain();
+});
+
+document.getElementById('tradeTableBody').addEventListener('click', (e)=>{
+  if(e.target.classList.contains('trade-toggle')) return; // checkbox clicks are handled separately
+  const row = e.target.closest('tr[data-idx]');
+  if(!row) return;
+  const idx = parseInt(row.getAttribute('data-idx'),10);
+  setHighlight(idx, false);
+});
+
+document.getElementById('toggleAllTrades').addEventListener('change', (e)=>{
+  const checked = e.target.checked;
+  lastTrades.forEach(t=>{ tradeVisibility[t._idx] = checked; });
+  document.querySelectorAll('#tradeTableBody tr[data-idx]').forEach(row=>{
+    row.classList.toggle('row-hidden', !checked);
+    const cb = row.querySelector('.trade-toggle');
+    if(cb) cb.checked = checked;
+  });
+  redrawMain();
+});
+
+document.getElementById('clearHighlightBtn').addEventListener('click', ()=>{
+  highlightedTradeIdx = null;
+  document.querySelectorAll('#tradeTableBody tr').forEach(r=>r.classList.remove('row-highlighted'));
+  redrawMain();
+});
 
 const chartHostEl = document.getElementById('chartHost');
 
