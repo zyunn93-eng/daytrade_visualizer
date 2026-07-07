@@ -122,7 +122,7 @@
     </div>
     <div class="zoom-toolbar">
       <button id="zoomResetBtn" class="file-btn small">ズームをリセット</button>
-      <span class="note">ホイールで拡大縮小／ドラッグで左右移動／ダブルクリックでリセット</span>
+      <span class="note">ホイールで拡大縮小／ドラッグで左右移動／ダブルクリックでリセット／カーソルを合わせると価格を表示</span>
     </div>
     <div id="chartHost"></div>
     <div class="tooltip" id="tooltip"></div>
@@ -473,6 +473,30 @@ function durationStr(a,b){
   return Math.floor(d/60)+'時間'+(d%60?String(d%60)+'分':'');
 }
 
+// Linear-interpolate a value from a series of points sorted ascending by time key `tKey`.
+function interpAt(points, t, tKey, vKey){
+  if(!points || !points.length) return null;
+  if(t <= points[0][tKey]) return points[0][vKey];
+  const last = points[points.length-1];
+  if(t >= last[tKey]) return last[vKey];
+  for(let i=0;i<points.length-1;i++){
+    const a=points[i], b=points[i+1];
+    if(t>=a[tKey] && t<=b[tKey]){
+      if(b[tKey]===a[tKey]) return a[vKey];
+      const ratio=(t-a[tKey])/(b[tKey]-a[tKey]);
+      return a[vKey] + (b[vKey]-a[vKey])*ratio;
+    }
+  }
+  return null;
+}
+// Nearest-bar lookup (no interpolation) for OHLC bars — returns the closing price of the closest bar.
+function nearestBarClose(bars, t){
+  if(!bars || !bars.length) return null;
+  let best=null, bestD=Infinity;
+  bars.forEach(b=>{ const d=Math.abs(b.min-t); if(d<bestD){ bestD=d; best=b; } });
+  return best ? best.close : null;
+}
+
 function render(){
   const errorBox = document.getElementById('parseError');
   errorBox.textContent = '';
@@ -746,6 +770,11 @@ function drawMainChart(rows, trades, actualSeries, viewRange){
     ${hLines}${vLines}
     <path d="${pricePath}" fill="none" stroke="var(--text-faint)" stroke-width="1.3" stroke-dasharray="3,3" opacity="0.7"/>
     ${actualLayer}
+    <g id="hoverCrosshair" style="opacity:0;pointer-events:none;">
+      <line id="hoverVLine" x1="0" y1="${M.top}" x2="0" y2="${M.top+ch}" stroke="var(--text-faint)" stroke-width="1" stroke-dasharray="3,3"/>
+      <circle id="hoverActualDot" r="4" fill="var(--tick)" stroke="var(--panel)" stroke-width="1.5" style="display:none;"/>
+    </g>
+    <rect id="chartHoverOverlay" x="${M.left}" y="${M.top}" width="${cw}" height="${ch}" fill="transparent" style="cursor:crosshair;"/>
     ${bridges}
     ${hLabels}${vLabels}
     <line x1="${M.left}" y1="${M.top+ch}" x2="${M.left+cw}" y2="${M.top+ch}" stroke="var(--border)" stroke-width="1"/>
@@ -775,6 +804,48 @@ function drawMainChart(rows, trades, actualSeries, viewRange){
     g.addEventListener('mouseleave', ()=>{ tooltip.style.opacity = 0; });
     g.addEventListener('click', ()=>{ setHighlight(i, true); });
   });
+
+  // hover crosshair: shows the price at the cursor's time position anywhere over the plot area
+  const hoverOverlay = document.getElementById('chartHoverOverlay');
+  const hoverGroup = document.getElementById('hoverCrosshair');
+  const hoverVLine = document.getElementById('hoverVLine');
+  const hoverActualDot = document.getElementById('hoverActualDot');
+  if(hoverOverlay){
+    hoverOverlay.addEventListener('mousemove', (e)=>{
+      const svgEl = host.querySelector('svg');
+      if(!svgEl) return;
+      const svgRect = svgEl.getBoundingClientRect();
+      const relX = Math.min(1, Math.max(0, (e.clientX - svgRect.left) / svgRect.width));
+      const px = relX * W;
+      const t = tMin + (px - M.left) / cw * (tMax - tMin);
+
+      let actualPriceAtT = null;
+      if(actualSeries){
+        if(actualSeries.type === 'tick') actualPriceAtT = interpAt(actualSeries.points, t, 'min', 'price');
+        else actualPriceAtT = nearestBarClose(actualSeries.bars, t);
+      }
+
+      const xx = x(t);
+      hoverVLine.setAttribute('x1', xx); hoverVLine.setAttribute('x2', xx);
+      if(actualPriceAtT !== null){
+        hoverActualDot.setAttribute('cx', xx); hoverActualDot.setAttribute('cy', y(actualPriceAtT));
+        hoverActualDot.style.display = '';
+      } else hoverActualDot.style.display = 'none';
+      hoverGroup.style.opacity = 1;
+
+      let html = `<div class="t-title">${fmtMin(Math.round(t))}</div>`;
+      if(actualPriceAtT !== null) html += `<div class="t-row">実際の値動き　<b>${yenPlain(actualPriceAtT)}</b></div>`;
+      tooltip.innerHTML = html;
+      const rect = host.getBoundingClientRect();
+      tooltip.style.left = (e.clientX - rect.left + 16) + 'px';
+      tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
+      tooltip.style.opacity = 1;
+    });
+    hoverOverlay.addEventListener('mouseleave', ()=>{
+      hoverGroup.style.opacity = 0;
+      tooltip.style.opacity = 0;
+    });
+  }
 }
 
 function setHighlight(idx, scrollToRow){
@@ -1157,7 +1228,7 @@ pre{background:#0D131C;border:1px solid var(--border);border-radius:8px;padding:
   <h2>価格推移とトレード</h2>
   <div class="zoom-toolbar">
     <button class="zoom-btn" id="zoomResetBtn">ズームをリセット</button>
-    <span class="hint">ホイールで拡大縮小／ドラッグで移動／ダブルクリックでリセット／トレードにカーソルを合わせると詳細表示</span>
+    <span class="hint">ホイールで拡大縮小／ドラッグで移動／ダブルクリックでリセット／カーソルを合わせると価格・トレード詳細を表示</span>
   </div>
   <div class="chart-wrap">
     <div id="chartHost"></div>
@@ -1189,6 +1260,27 @@ pre{background:#0D131C;border:1px solid var(--border);border-radius:8px;padding:
   function fmtMin(total){ const h=Math.floor(total/60), m=total%60; return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
   function yenPlain(n){ return Math.round(n).toLocaleString('ja-JP')+'円'; }
   function yen(n){ return (n>0?'+':'')+Math.round(n).toLocaleString('ja-JP')+'円'; }
+  function interpAt(points, t, tKey, vKey){
+    if(!points || !points.length) return null;
+    if(t <= points[0][tKey]) return points[0][vKey];
+    const last = points[points.length-1];
+    if(t >= last[tKey]) return last[vKey];
+    for(let i=0;i<points.length-1;i++){
+      const a=points[i], b=points[i+1];
+      if(t>=a[tKey] && t<=b[tKey]){
+        if(b[tKey]===a[tKey]) return a[vKey];
+        const ratio=(t-a[tKey])/(b[tKey]-a[tKey]);
+        return a[vKey] + (b[vKey]-a[vKey])*ratio;
+      }
+    }
+    return null;
+  }
+  function nearestBarClose(bars, t){
+    if(!bars || !bars.length) return null;
+    let best=null, bestD=Infinity;
+    bars.forEach(b=>{ const d=Math.abs(b.min-t); if(d<bestD){ bestD=d; best=b; } });
+    return best ? best.close : null;
+  }
   function clampRange(min,max,dataMin,dataMax){
     let w = max-min;
     if(w > dataMax-dataMin) w = dataMax-dataMin;
@@ -1295,7 +1387,13 @@ pre{background:#0D131C;border:1px solid var(--border);border-radius:8px;padding:
       '<defs><filter id="tradeGlow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'+
       lunch + hLines + vLines +
       '<path d="'+pricePath+'" fill="none" stroke="var(--text-faint)" stroke-width="1.3" stroke-dasharray="3,3" opacity="0.7"/>'+
-      actualLayer + bridges + hLabels + vLabels +
+      actualLayer +
+      '<g id="hoverCrosshair" style="opacity:0;pointer-events:none;">'+
+        '<line id="hoverVLine" x1="0" y1="'+M.top+'" x2="0" y2="'+(M.top+ch)+'" stroke="var(--text-faint)" stroke-width="1" stroke-dasharray="3,3"/>'+
+        '<circle id="hoverActualDot" r="4" fill="var(--tick)" stroke="var(--panel)" stroke-width="1.5" style="display:none;"/>'+
+      '</g>'+
+      '<rect id="chartHoverOverlay" x="'+M.left+'" y="'+M.top+'" width="'+cw+'" height="'+ch+'" fill="transparent" style="cursor:crosshair;"/>'+
+      bridges + hLabels + vLabels +
       '<line x1="'+M.left+'" y1="'+(M.top+ch)+'" x2="'+(M.left+cw)+'" y2="'+(M.top+ch)+'" stroke="var(--border)" stroke-width="1"/>'+
       '</svg>';
     document.getElementById('chartHost').innerHTML = svg;
@@ -1320,6 +1418,47 @@ pre{background:#0D131C;border:1px solid var(--border);border-radius:8px;padding:
       });
       g.addEventListener('mouseleave', function(){ tooltip.style.opacity = 0; });
     });
+
+    const hoverOverlay = document.getElementById('chartHoverOverlay');
+    const hoverGroup = document.getElementById('hoverCrosshair');
+    const hoverVLine = document.getElementById('hoverVLine');
+    const hoverActualDot = document.getElementById('hoverActualDot');
+    if(hoverOverlay){
+      hoverOverlay.addEventListener('mousemove', function(e){
+        const svgEl = host.querySelector('svg');
+        if(!svgEl) return;
+        const svgRect = svgEl.getBoundingClientRect();
+        const relX = Math.min(1, Math.max(0, (e.clientX - svgRect.left) / svgRect.width));
+        const px = relX * W;
+        const t = tMin + (px - M.left) / cw * (tMax - tMin);
+
+        let actualPriceAtT = null;
+        if(actualSeries){
+          if(actualSeries.type === 'tick') actualPriceAtT = interpAt(actualSeries.points, t, 'min', 'price');
+          else actualPriceAtT = nearestBarClose(actualSeries.bars, t);
+        }
+
+        const xx = x(t);
+        hoverVLine.setAttribute('x1', xx); hoverVLine.setAttribute('x2', xx);
+        if(actualPriceAtT !== null){
+          hoverActualDot.setAttribute('cx', xx); hoverActualDot.setAttribute('cy', y(actualPriceAtT));
+          hoverActualDot.style.display = '';
+        } else hoverActualDot.style.display = 'none';
+        hoverGroup.style.opacity = 1;
+
+        let html = '<div class="t-title">'+fmtMin(Math.round(t))+'</div>';
+        if(actualPriceAtT !== null) html += '<div class="t-row">実際の値動き　<b>'+yenPlain(actualPriceAtT)+'</b></div>';
+        tooltip.innerHTML = html;
+        const rect = host.getBoundingClientRect();
+        tooltip.style.left = (e.clientX - rect.left + 16) + 'px';
+        tooltip.style.top = (e.clientY - rect.top - 10) + 'px';
+        tooltip.style.opacity = 1;
+      });
+      hoverOverlay.addEventListener('mouseleave', function(){
+        hoverGroup.style.opacity = 0;
+        tooltip.style.opacity = 0;
+      });
+    }
   }
 
   function resetZoom(){ viewRange = null; drawChart(); }
